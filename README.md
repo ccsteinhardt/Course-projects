@@ -1,2 +1,2 @@
 # Course-projects
-# This repository contains projects completed for graduate course on generalized linear models at Wake Forest University, fall 2022.
+This repository contains projects completed for graduate courses on generalized linear models and statistical learning at Wake Forest University, fall 2022.
