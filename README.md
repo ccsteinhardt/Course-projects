@@ -1,5 +1,5 @@
 # Course-projects
-This repository contains projects completed for graduate courses (generalized linear models and statistical learning) at Wake Forest University in fall 2022.
+This repository contains projects completed for graduate courses (generalized linear models and statistical learning) at Wake Forest University in fall 2022. All projects use R unless otherwise specified.
 
 The project labeled "PredictingExerciseLRFS" explores two research questions concerning exercise and health among American adults: first, whether there is a relationship between the amount of weight a person wants to lose and the probability that they exercise regularly, after accounting for the person’s age, general state of health, and whether they have healthcare coverage; and second, how accurately we can predict that a person regularly exercises. The project includes both a logistic regression model and a forward selection with AIC model, using the first to conclude that there is a relationship between desired weight change and regular exercise, and using the second to attempt to predict whether a person regularly exercises with greatest possible accuracy. The data examined in this project was collected in a Centers for Disease Control telephone survey, the Behavioral Risk Factor Surveillance System ([BRFSS](https://www.cdc.gov/brfss/)).
 
