@@ -1,0 +1,622 @@
+---
+title: "Predicting Regular Exercise among Adults, Using Logistic Regression and Forward Selection (AIC)"
+author: "Charlotte Steinhardt"
+date: "November 10, 2022"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+## Executive Summary
+
+Regular exercise is widely recognized as a fundamental contributing factor to good health, positively affecting cognition, risk of depression, weight management, risk of cardiovascular and metabolic disease, bone and muscle strength, physical balance, longevity, and chronic illness management ([CDC](https://www.cdc.gov/physicalactivity/basics/pa-health/index.htm)). This report explores two research questions concerning exercise and health: first, whether there is a relationship between the amount of weight a person wants to lose and the probability that they exercise regularly, after accounting for the person’s age, general state of health, and whether they have healthcare coverage; and second, how accurately we can predict that a person regularly exercises. We construct both a logistic regression model and a forward selection with AIC model, using the first to conclude that there is a relationship between desired weight change and regular exercise, and using the second to attempt to predict whether a person regularly exercises with greatest possible accuracy. Finally, we compare the two models and recommend avenues of further inquiry.
+
+
+## Section 1: Introduction
+
+Regular exercise has long been identified by healthcare practitioners as a fundamental contributing factor in general health, weight management, and longevity ([CDC](https://www.cdc.gov/physicalactivity/basics/pa-health/index.htm)). This project addresses two research questions concerning exercise. The first question is whether there is a relationship between the amount of weight a person wants to lose and the probability that they exercise regularly, after accounting for the person’s age, general state of health, and whether they have healthcare coverage. The second question is how well we can predict that a person regularly exercises, based on additional variables in the data set. 
+
+The data examined in this project was collected in a Centers for Disease Control telephone survey, the Behavioral Risk Factor Surveillance System ([BRFSS](https://www.cdc.gov/brfss/)). Since 1984, the BRFSS has annually surveyed hundreds of thousands of US residents about their “health-related risk behaviors, chronic health conditions, and use of preventive services,” resulting in a data set containing over 200 variables. This project analyzes a 20,000-participant subset of the respondents surveyed in a recent year. 
+
+With respect to the first research question, we use the response variable “whether respondent exercised in the last month” as a representation of whether the respondent exercises regularly. Explanatory variables include "desired weight change" (abbreviated "weight change" in the remainder of this report), a variable we created and added to the data set (explained in Section 2), as well as age, general health, and healthcare coverage. In answering the second research question, we use the same response variable, as well as respondents' height, weight, and whether a respondent had smoked at least 100 cigarettes in their lifetime. 
+
+We construct two models. The first, designed according to provided guidelines, is a logistic regression model that we will use in conjunction with a likelihood ratio test and hypothesis testing to attempt to determine whether there is a relationship between the amount of weight a person wishes to lose and whether they exercise regularly. The second model will be constructed using forward selection with AIC, prioritizing predictive ability. We will compare accuracy metrics and determine which of the models is most helpful in predicting whether a person exercises regularly.
+
+
+
+## Section 2: Data
+
+The nine variables in the data set are: respondent’s general health (rated in five categories from poor to excellent), whether a respondent had exercised in the past month, whether the respondent had health coverage, whether the respondent had smoked at least 100 cigarettes in their lifetime, and a number of physical attributes: the respondent’s height (in inches), weight and also desired weight (in pounds), age (in years), and gender (limited to male or female). 
+
+Each row in the data set contains the above information for a single survey respondent. As mentioned in Section 1, this project examines a subset of the total survey data: nine variables (columns) for 20,000 respondents (rows). There is no data missing from this subset. 
+
+The variable "weight change" was created and added to the dataset in order to address the first research question. "Weight change" here signifies the difference between a respondent’s actual weight and desired weight (pounds), where a positive value indicates the amount of weight a person wishes to lose.
+
+```{r include=FALSE}
+source("http://www.openintro.org/stat/data/cdc.R")
+```
+
+```{r include=FALSE}
+library(ggplot2)
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(statmod)
+library(car)
+library(MASS)
+library(pROC)
+library(corrplot)
+```
+
+```{r include=FALSE}
+#Add wtchange variable to data frame
+cdc$wtchange<- cdc$weight - cdc$wtdesire
+#Note: positive number = number of pounds would like to lose; a negative number = number of pounds would like to gain
+```
+
+```{r include=FALSE}
+#Recoding two categorical variables as factors
+cdc$smoke100 <- as.factor(cdc$smoke100)
+cdc$smoke100 <- recode_factor(cdc$smoke100, "1" = "Yes", "0" = "No")
+cdc$hlthplan <- as.factor(cdc$hlthplan)
+cdc$hlthplan <- recode_factor(cdc$hlthplan, "1" = "Yes", "0" = "No")
+```
+
+```{r include=FALSE}
+#Check for missing values
+sum(is.na(cdc))
+```
+
+```{r include=FALSE}
+#Created a dataset with the response variable coded yes/no for a readable table
+cdct <- cdc
+cdct$exerany <- as.factor(cdct$exerany)
+cdct$exerany <- recode_factor(cdct$exerany, "1" = "Yes", "0" = "No")
+```
+
+Table 2.1.1 provides some information about the response variable: 14,914 of the 20,000, or 74.57% of the respondents in this data stated that they had exercised in the past month. 
+
+\
+
+```{r echo=FALSE}
+#Table 2.1.1, showing response variable counts
+kable(table(cdct$exerany), col.names=c("Exercised", "Count"), caption = "Table 2.1.1: Participants' Exercise in Last Month")
+
+#Code adapted from https://www.marsja.se/how-to-rename-factor-levels-in-r-dplyr/
+```
+
+The boxplot in Figure 2.2.1 shows the distribution of desired weight change. The data contains some drastic outliers, several of which can likely be attributed to recording errors or pranks (e.g., respondents who wished to gain 500 pounds or to lose an extraordinarily large percentage of their body weight). Fifty percent of respondents wished to lose between 0 and 21 pounds.
+
+Respondents ranged in age from 18 to 99, with the middle fifty percent between 31 and 57 years old. Height and weight seemed normally distributed.
+
+\
+
+```{r, echo=FALSE, fig.cap = "Figure 2.2.1: Desired weight change."}
+#Check for outliers (wtchange boxplot)
+ggplot(data = cdc, aes(x = wtchange)) + 
+  geom_boxplot() +
+  labs(x = "Desired weight change (lbs)")
+#Many outliers.
+```
+
+```{r eval=FALSE, include=FALSE}
+summary(cdc$age)
+summary(cdc$wtchange)
+summary(cdc$weight)
+summary(cdc$height)
+```
+
+```{r include=FALSE}
+#Empirical logit plot function
+logodds_plot <- function(data, num_bins, bin_method,
+                         x_name, y_name, grouping = NULL, 
+                         reg_formula = y ~ x){
+  
+  if(is.null(grouping)){
+    dat <- data.frame(x = data %>% pull(x_name), 
+                      y = data %>% pull(y_name),
+                      group = 1)
+  } else {
+    dat <- data.frame(x = data %>% pull(x_name), 
+                      y = data %>% pull(y_name),
+                      group = as.factor(data %>% pull(grouping)))
+  }
+  
+  if(bin_method == "equal_size"){
+    logodds_table <- dat %>%
+      drop_na() %>%
+      arrange(group, x) %>%
+      group_by(group) %>%
+      mutate(obs = y,
+             bin = rep(1:num_bins,
+                       each=ceiling(n()/num_bins))[1:n()]) %>%
+      group_by(bin, group) %>%
+      summarize(mean_x = mean(x),
+                prop = mean(c(obs, 0.5)),
+                num_obs = n()) %>%
+      ungroup() %>%
+      mutate(logodds = log(prop/(1 - prop)))
+  } else {
+    logodds_table <- dat %>%
+      drop_na() %>%
+      group_by(group) %>%
+      mutate(obs = y,
+             bin = cut(x, 
+                       breaks = num_bins,
+                       labels = F)) %>%
+      group_by(bin, group) %>%
+      summarize(mean_x = mean(x),
+                prop = mean(c(obs, 0.5)),
+                num_obs = n()) %>%
+      ungroup() %>%
+      mutate(logodds = log(prop/(1 - prop)))
+  }
+  
+  if(is.null(grouping)){
+    logodds_table %>%
+      ggplot(aes(x = mean_x,
+                 y = logodds)) +
+      geom_point(size=2) +
+      geom_smooth(se=F, method="lm", formula = reg_formula) +
+      theme_bw() +
+      labs(x = x_name,
+           y = "Empirical log odds") +
+      theme(text = element_text(size=15))
+  } else {
+    logodds_table %>%
+      ggplot(aes(x = mean_x,
+                 y = logodds,
+                 color = group,
+                 shape = group)) +
+      geom_point(size=2) +
+      geom_smooth(se=F, method="lm", formula = reg_formula) +
+      theme_bw() +
+      labs(x = x_name,
+           y = "Empirical log odds",
+           color = grouping,
+           shape = grouping) +
+      theme(text = element_text(size=15))
+  }
+  
+}
+```
+
+\
+
+Figures 2.2.2-9 show logit plots. There seem to be linear relationships between the continuous variables and empirical log odds of a respondent exercising in the month prior to the survey, except in the case of desired weight change. The logit plot for desired weight change (Figure 2.2.2) generally shows that the more weight a person wishes to lose, the less likely they are to have exercised within the month prior to the survey; however, the relationship depicted in this plot cannot be reasonably described as linear. We have chosen to fit a line in order to be able to interpret the model. 
+
+There is apparent interaction (shown in the differing slopes in the regression lines) between desired weight change and healthcare coverage (Figure 2.2.4) and between age and general health status (Figure 2.2.6), so the model constructed in Section 3.1 will include interaction terms to account for this. 
+
+We also include an interaction term to account for possible interaction between desired weight change and general health status (Figure 2.2.3). As noted above in reference to Figure 2.2.2, the relationship between desired weight change and the empirical log odds of having exercised within the last month cannot be described as linear, and the differing slopes in Figure 2.2.3 might result from this rather than from true interaction. We include the interaction term as a precaution.
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.2: Log odds of exercising vs. desired weight change."}
+logodds_plot(cdc, 40, "equal_size", "wtchange", "exerany",
+             reg_formula = y ~ x) +
+  labs(x = "Desired weight change (lbs)")
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.3: Log odds of exercising vs. desired weight change, accounting for general health."}
+logodds_plot(cdc, 30, "equal_size", "wtchange", "exerany",
+             reg_formula = y ~ x, grouping = "genhlth") +
+  labs(x = "Desired weight change (lbs)")
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.4: Log odds of exercising vs. desired weight change, accounting for health coverage."}
+logodds_plot(cdc, 30, "equal_size", "wtchange", "exerany",
+             reg_formula = y ~ x, grouping = "hlthplan") +
+  labs(x = "Desired weight change (lbs)")
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.5: Log odds of exercising vs. age."}
+logodds_plot(cdc, 30, "equal_size", "age", "exerany",
+             reg_formula = y ~ x) +
+  labs(x = "Age (years)")
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.6: Log odds of exercising vs. age, accounting for general health."}
+logodds_plot(cdc, 30, "equal_size", "age", "exerany",
+             reg_formula = y ~ x, grouping = "genhlth") +
+  labs(x = "Age (years)")
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.7: Log odds of exercising vs. age, accounting for health coverage."}
+logodds_plot(cdc, 30, "equal_size", "age", "exerany",
+             reg_formula = y ~ x, grouping = "hlthplan") +
+  labs(x = "Age (years)")
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.8: Log odds of exercising vs. height."}
+logodds_plot(cdc, 30, "equal_size", "height", "exerany",
+             reg_formula = y ~ x) +
+  labs(x = "Height (inches)")
+#Model 2
+```
+
+\
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 2.2.9: Log odds of exercising vs. weight."}
+logodds_plot(cdc, 30, "equal_size", "weight", "exerany",
+             reg_formula = y ~ x) +
+  labs(x = "Weight (lbs)")
+#Model 2
+```
+
+\
+
+## Section 3: Modeling
+
+### Section 3.1: Exercise and weight loss goals
+
+To address the first research question (whether there is a relationship between the amount of weight a person wants to lose and the probability that they exercise regularly, after accounting for the person’s age, general state of health, and whether they have healthcare coverage), we will fit the following model (**Model 1**), in which $Y_i$ ~ $Bernoulli(p_i)$:
+
+$$log\left(\frac{p_i}{1-p_i}\right) = 
+\beta_0 + 
+\beta_1Wtchange_i + 
+\beta_2Age_i + 
+\beta_3GenHlthVeryGood_i +
+\beta_4GenHlthGood_i + 
+\beta_5GenHlthFair_i + 
+\beta_6GenHlthPoor_i + 
+\beta_7HlthplanNo_i + $$
+
+$$\beta_8Wtchange_iGenHlthVeryGood_i +
+\beta_9Wtchange_iGenHlthGood_i +
+\beta_{10}Wtchange_iGenHlthFair_i +
+\beta_{11}Wtchange_iGenHlthPoor_i + $$
+
+$$\beta_{12}Wtchange_iHlthplanNo_i +
+\beta_{13}Age_iGenHlthVeryGood_i +
+\beta_{14}Age_iGenHlthGood_i +
+\beta_{15}Age_iGenHlthFair_i +
+\beta_{16}Age_iGenHlthPoor_i$$
+
+The estimates for the $\beta$ coefficients in the population model are provided in Table 3.1.1, below. Each is a measure of the impact of the affiliated variable on the log odds; e.g., a one-unit increase in age decreases the log odds of a person exercising in the last month by a factor of 0.0080775. 
+
+\
+
+**Table 3.1.1: Coefficient Estimates for Model 1**
+
+| **Coefficient** | **Estimate** |
+|-----------------|--------------|
+| $Intercept$              | 2.1657680    |
+| $Wtchange$               | -0.0138118   |
+| $Age$              | -0.0080775   |
+| $GenhlthVerygood$              | -0.1335011   |
+| $GenhlthGood$              | -0.8299086   |
+| $GenhlthFair$              | -1.3326075   |
+| $GenhlthPoor$              | -1.5888671   |
+| $HlthplanNo$              | -0.5219310   |
+| $Wtchange:GenhlthVerygood$              | 0.0052370    |
+| $Wtchange:GenhlthGood$              | 0.0082786    |
+| $Wtchange:GenhlthFair$             | 0.0080058    |
+| $Wtchange:GenhlthPoor$             | 0.0117641    |
+| $Wtchange:HlthplanNo$             | 0.0035400    |
+| $Age:GenhlthVerygood$             | -0.0016781   |
+| $Age:GenhlthGood$             | 0.0008222    |
+| $Age:GenhlthFair$             | 0.0019672    |
+| $Age:GenhlthPoor$             | -0.0046709   |
+
+
+As we wish to know whether the amount of weight a respondent wants to lose has any bearing on their exercise habits, we construct the following hypotheses:
+
+$H_0: \beta_1 = \beta_8 = \beta_9 = \beta_{10} = \beta_{11} = \beta_{12} = 0$
+
+$H_A:$ At least one of $\beta_1, \beta_8, \beta_9, \beta_{10}, \beta_{11}, \beta_{12} \neq 0$
+
+We use a likelihood ratio test, obtaining a test statistic G = 190 with 7 degrees of freedom and a p-value very close to 0 ($1.500427*10^{-37}$). With this small a p-value, we reject the null hypothesis that there is no relationship between the amount of weight a person wants to lose and whether they exercise regularly.
+
+```{r include=FALSE}
+#FULL logistic regression model for first research question (Model 1)
+q1m <- glm(exerany ~ wtchange + age + wtchange*genhlth + wtchange*hlthplan + age*genhlth, data = cdc, family = "binomial")
+
+summary(q1m)
+```
+
+```{r include=FALSE}
+#REDUCED logistic regression model for first research question
+q1mr <- glm(exerany ~ age + age*genhlth, data = cdc, family = "binomial")
+
+summary(q1mr)
+```
+
+```{r include=FALSE}
+#Likelihood Ratio Test
+G = 21629-21439
+pchisq(G, df = 19990-19983, lower.tail = FALSE)
+```
+
+
+### Section 3.2: Predicting exercise 
+
+This section will compare the model (Model 1) constructed in Section 3.1 with a second model constructed using forward selection with AIC. (Models selected using BIC tend to predict less accurately than models selected using AIC, and accurate prediction is a priority for the second research question.) 
+
+When specifying the largest model we wish to consider, we will exclude desired weight, because it is a linear combination of two other variables we are including: weight and (desired) weight change. 
+
+The upper bound on our AIC model (the largest model we will consider) is, in population form:
+
+$$log\left(\frac{p_i}{1-p_i}\right) = 
+\beta_0 + 
+\beta_1GenHlthVeryGood_i +
+\beta_2GenHlthGood_i + 
+\beta_3GenHlthFair_i + 
+\beta_4GenHlthPoor_i + 
+\beta_5Height_i +
+\beta_6Weight_i + $$ 
+
+$$\beta_7HlthplanNo_i +      
+\beta_8Age_i +
+\beta_9Smoke100No_i + 
+\beta_{10}Wtchange_i + 
+\beta_{11}GenHlthVeryGood_iWtchange_i + $$  
+
+$$\beta_{12}GenHlthGood_iWtchange_i +      
+\beta_{13}GenHlthFair_iWtchange_i + 
+\beta_{14}GenHlthPoor_iWtchange_i + 
+\beta_{15}HlthplanNo_iWtchange_i +     
+\beta_{16}GenderFemale_i$$
+
+$$\beta_{17}GenHlthVeryGood_iAge_i
+\beta_{18}GenHlthGood_iAge_i
+\beta_{19}GenHlthFair_iAge_i
+\beta_{20}GenHlthPoor_iAge_i$$
+
+The model (**Model 2**) produced using forward selection with AIC is, in population form:
+
+$$log\left(\frac{p_i}{1-p_i}\right) = 
+\beta_0 + 
+\beta_1GenHlthVeryGood_i +
+\beta_2GenHlthGood_i + 
+\beta_3GenHlthFair_i + 
+\beta_4GenHlthPoor_i + 
+\beta_5Height_i +
+\beta_6Weight_i + $$
+
+$$\beta_7HlthplanNo_i +
+\beta_8Age_i + 
+\beta_9Smoke100No_i +
+\beta_{10}Wtchange_i + 
+\beta_{11}GenHlthVeryGood_iWtchange_i + $$
+
+$$\beta_{12}GenHlthGood_iWtchange_i + 
+\beta_{13}GenHlthFair_iWtchange_i + 
+\beta_{14}GenHlthPoor_iWtchange_i + 
+\beta_{15}HlthplanNo_iWtchange_i $$
+
+
+Forward selection with AIC resulted in the inclusion of several variables in Model 2 that did not appear in Model 1: respondent's height, respondent's weight, and whether a respondent had smoked at least 100 cigarettes in their lifetime. Height and not having smoked at least 100 cigarettes in one's lifetime had positive relationships with the log odds of having exercised; weight had a negative relationship with the log odds of having exercised.
+
+In assessing Model 2's predictions for whether a respondent had exercised at least once in the month prior to the survey, we adopt a threshold of 0.7481163, such that a predicted probability at or over 0.7481163 is taken to mean that the respondent *had* exercised, and under 0.7481163 is taken to mean that they *had not* exercised. (The value 0.7481163 is derived from the ROC curve in Figure 3.2.2; it is the value that maximizes specificity and sensitivity.)
+
+```{r include=FALSE}
+#Model 2
+q2m0 <- glm(exerany ~ 1, data = cdc, family = "binomial")
+
+# forward selection using AIC
+# Note we have to specify the largest model we want to consider
+forward_aic <- stepAIC(q2m0, scope = ~ wtchange + age + genhlth + hlthplan + smoke100 + height + weight + gender + wtchange*genhlth + wtchange*hlthplan + age*genhlth,
+                      direction = "forward",
+                      trace = 0)
+
+summary(forward_aic)
+```
+
+The confusion matrix in Table 3.2.2, in which "0" in the leftmost column corresponds to *predicted not to have exercised by the model* and "1" corresponds to *predicted to have exercised by the model,* shows that the AIC model (Model 2) was 63.75% accurate in predicting whether a respondent had exercised within the past month. 
+
+The model constructed in Section 3.1 (Model 1) was very slightly more accurate, correctly predicting 61.54% of respondents' exercise histories (see Table 3.2.1). This confusion matrix uses a threshold of 0.7577368, based on the value from the ROC curve in Figure 3.2.1 that maximizes specificity and sensitivity. It should be noted that these accuracy measurements are not as reliable as what could be obtained by setting up training and test data sets and using cross validation. 
+
+Based on the possibility that respondents might be inclined to overestimate how much they have exercised, either by mistake or design, it seems reasonable to suppose that positive rates (both true and false) might be less reliable than some other metrics. We will therefore compare specificity (true negative rate) and false negative rate for the two models. Using the confusion matrices below, we obtain specificities of 62.84% for Model 1 and 60.26% for Model 2. We obtain false negative rates of 38.91% for Model 1 and 35.06% for Model 2. Higher accuracy and specificity are desirable, as is a lower false negative rate; while Model 1 had slightly higher accuracy and specificity, it also had a higher false negative rate. Prior to more thorough testing, it is difficult to conclude that either model is superior for predictive purposes. 
+
+\
+
+```{r include=FALSE}
+#Predictions from Model 1
+preds1 <- predict(q1m, type="response")
+predsbinary1 <- ifelse(preds1 < 0.7577368, "0", "1")
+```
+
+```{r include=FALSE}
+#Predictions from Model 2 (AIC)
+preds2 <- predict(forward_aic, type="response")
+predsbinary2 <- ifelse(preds2 < 0.7481163, "0", "1")
+```
+
+```{r, echo=F, message=F}
+#Confusion Matrix (Model 1)
+kable(table(predsbinary1, cdc$exerany), caption= "Table 3.2.1: Confusion Matrix for Model 1", col = c("No Exercise", "Exercise"))
+```
+
+```{r, echo=F, message=F}
+#Confusion Matrix (Model 2)
+kable(table(predsbinary2, cdc$exerany), caption= "Table 3.2.2: Confusion Matrix for Model 2", col = c("No Exercise", "Exercise"))
+```
+
+```{r eval=FALSE, include=FALSE}
+(3196 + 9111)/(3196 + 9111 + 1890 + 5803) #accuracy of Model 1
+(3065 + 9685)/(3065 + 9685 + 2021 + 5229) #accuracy of Model 2
+
+5803/(5803 + 9111) #false negative rate of Model 1
+5229/(5229 + 9685) #false negative rate of Model 2
+
+3196/(3196 + 1890) #specificity of Model 1
+3065/(3065 + 2021) #specificity of Model 2
+```
+
+ROC curves for Model 1 and Model 2 are shown in Figures 3.2.1 and 3.2.2, respectively. The area under the Model 1 ROC curve is 0.6591 and the area under Model 2's ROC curve is a slightly superior 0.6685. By this measure, Model 2 is slightly more useful for predictive purposes.
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.2.1: ROC curve for Model 1."}
+#ROC curve for first model
+roccurve1 <- roc(cdc$exerany, as.numeric(preds1))
+plot(roccurve1)
+```
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+coords(roccurve1, "best") #Gives threshold with best specificity and sensitivity: 0.7577368
+```
+
+```{r, echo = FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.2.2: ROC curve for Model 2."}
+#ROC curve for second model
+roccurve2 <- roc(cdc$exerany, as.numeric(preds2))
+plot(roccurve2)
+#From Rickert's blog post
+```
+
+```{r eval=FALSE, message=FALSE, include=FALSE}
+coords(roccurve2, "best") #Gives threshold with best specificity and sensitivity: 0.7481163
+```
+
+```{r eval=FALSE, include=FALSE}
+#AUC
+auc(roccurve1)
+auc(roccurve2)
+```
+
+\
+
+### Section 3.3: Model diagnostics
+
+This section checks assumptions made in the construction of the models in Sections 3.1 and 3.2. We see in the correlation plot in Figure 3.3.1 that (unsurprisingly) height and weight are correlated, as are weight and weight change. 
+
+```{r include=FALSE}
+#Checking correlation between quantitative explanatory variables
+cdcquant <- cdc %>% 
+  dplyr::select("age", "height", "weight", "wtchange")
+```
+
+```{r, echo = FALSE, fig.cap = "Figure 3.3.1: Correlation plot for continuous variables in the data set."}
+corrplot(cor(cdcquant))
+```
+
+\
+
+Maximum Cooks distance for Model 1 and Model 2 are 0.02098783 and 0.030751, respectively, so there are no influential points in either case, based on a conventional threshold of 0.5. 
+
+We find no multicollinearity issue in either model: as shown in Tables 3.3.1 and 3.3.2, all VIF values exceeding 5 are affiliated with variables that appear in interaction terms.
+
+\
+
+```{r eval=FALSE, include=FALSE}
+#Cook's distance for influential points
+max(cooks.distance(q1m))
+max(cooks.distance(forward_aic))
+```
+
+```{r echo=FALSE}
+#VIF
+#No potential multicollinearity for variables that aren't involved in an interaction term, using a threshold of 5. 
+vifq1m <- as.data.frame(vif(q1m))
+vifq1m <- vifq1m %>% 
+  dplyr::select(GVIF, Df)
+knitr::kable(vifq1m, caption = "Table 3.3.1: VIF for Model 1)")
+
+vifaic <- as.data.frame(vif(forward_aic))
+vifaic <- vifaic %>% 
+  dplyr::select(GVIF, Df)
+knitr::kable(vifaic, caption = "Table 3.3.2: VIF for Model 2)")
+```
+
+Figures 3.3.2-7 show quantile residual plots for the continuous variables in both models. We see no meaningful violations, though the outliers in the data cause some oddities in the weight change plots.
+
+```{r echo=FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.3.2: Residuals for age (Model 1)."}
+#Quantile residual plot to check shape assumption for age (MODEL 1)
+cdc %>% 
+  mutate(resids1 = qresid(q1m)) %>%
+  ggplot(aes(x = age, y = resids1)) +
+  geom_point() +
+  geom_smooth() + 
+  labs(x = "age", y = "residuals")
+```
+
+\
+
+```{r echo=FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.3.3: Residuals for age (Model 2)."}
+#Quantile residual plot to check shape assumption for age (MODEL 1)
+cdc %>% 
+  mutate(resids2 = qresid(forward_aic)) %>%
+  ggplot(aes(x = age, y = resids2)) +
+  geom_point() +
+  geom_smooth() + 
+  labs(x = "age", y = "residuals")
+```
+
+\
+
+```{r echo=FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.3.4: Residuals for weight change (Model 1)."}
+#Quantile residual plot to check shape assumption for weight change (MODEL 1)
+cdc %>% 
+  mutate(resids1 = qresid(q1m)) %>%
+  ggplot(aes(x = wtchange, y = resids1)) +
+  geom_point() +
+  geom_smooth() + 
+  labs(x = "weight change (lbs)", y = "residuals")
+```
+
+\
+
+```{r echo=FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.3.5: Residuals for weight change (Model 2)."}
+#Quantile residual plot to check shape assumption for weight change (MODEL 2)
+cdc %>% 
+  mutate(resids2 = qresid(forward_aic)) %>%
+  ggplot(aes(x = wtchange, y = resids2)) +
+  geom_point() +
+  geom_smooth() + 
+  labs(x = "weight change (lbs)", y = "residuals")
+```
+
+\
+
+```{r echo=FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.3.6: Residuals for weight (Model 2)."}
+#Quantile residual plot to check shape assumption for weight (MODEL 2)
+cdc %>% 
+  mutate(resids2 = qresid(forward_aic)) %>%
+  ggplot(aes(x = weight, y = resids2)) +
+  geom_point() +
+  geom_smooth() + 
+  labs(x = "weight (lbs)", y = "residuals")
+```
+
+\
+
+```{r echo=FALSE, message = FALSE, warning  = FALSE, fig.cap = "Figure 3.3.7: Residuals for height (Model 2)."}
+#Quantile residual plot to check shape assumption for height (MODEL 2)
+cdc %>% 
+  mutate(resids2 = qresid(forward_aic)) %>%
+  ggplot(aes(x = height, y = resids2)) +
+  geom_point() +
+  geom_smooth() +
+  labs(x = "height (inches)", y = "residuals")
+```
+
+\
+
+## Section 4: Discussion
+
+Model 1 seemed to offer some evidence for a relationship between desired weight change and regular exercise, but more strenuous training and testing is needed to confirm its predictive ability relative to that of Model 2. Further models could be constructed using forward selection with AIC, possibly accommodating more interaction terms. 
+
+Outliers were retained in the data set in this project, but removing the more drastic ones might offer more interpretable results. The very linear relationship between height and propensity for exercising shown in Figure 2.2.8 might be worth exploring further.
+
+\
+
+## Sources
+
+"Behavioral Risk Factor Surveillance System (BRFSS)." Centers for Disease Control and Prevention. https://www.cdc.gov/brfss/. Accessed October 12, 2022.
+
+"Benefits of Physical Activity." Centers for Disease Control and Prevention. https://www.cdc.gov/physicalactivity/basics/pa-health/index.htm. Accessed November 6, 2022.
+
+Rickert, Joseph. "Some R Packages for ROC Curves." https://rviews.rstudio.com/2019/03/01/some-r-packages-for-roc-curves/ Accessed October 12, 2022.
+
+Code for computation and figures other than ROC curves was adapted either from STA 712 class activities or (in the case of the confusion matrices) from Dr. Dalzell's STA 663 labs, unless otherwise noted.
